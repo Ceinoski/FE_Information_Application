@@ -1,4 +1,4 @@
-# FE Feed ⚡
+# FE Feed
 
 An addictive, Instagram/Reels-style study app for the **FE Electrical & Computer exam**. Swipe up through a never-ending feed of bite-sized formulas, key facts, and concepts — short enough to stay fun, important enough to matter. Build a daily streak, level up, and master cards topic by topic.
 
