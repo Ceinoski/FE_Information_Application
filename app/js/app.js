@@ -352,8 +352,8 @@
      The key lives only in localStorage and is sent straight from the
      browser to Google; it is never bundled into the app or the repo.
      ============================================================ */
-  // Discovered at runtime from the key's own ListModels response (cached per session).
-  let discoveredModel = null;
+  // Ordered candidate models discovered from the key, and the last known-good one (cached per session).
+  let modelOrder = null, workingModel = null;
   const sheetBackdrop = $("#sheetBackdrop"), explainSheet = $("#explainSheet"), exBodyEl = $("#exBody");
   let exReq = 0, exOpen = false;
 
@@ -428,10 +428,10 @@
     });
   }
 
-  // Ask the key what models it can actually use, then pick the best fast text model.
-  async function pickModel(key, signal) {
-    if (discoveredModel) return discoveredModel;
-    const res = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200", {
+  // Ask the key which models it can use, ranked so models likeliest to have free quota come first.
+  async function listCandidates(key, signal) {
+    if (modelOrder) return modelOrder;
+    const res = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000", {
       headers: { "x-goog-api-key": key }, signal
     });
     if (!res.ok) {
@@ -439,21 +439,16 @@
       try { m = (await res.json()).error?.message || m; } catch {}
       const err = new Error(m); err.status = res.status; throw err;
     }
+    const bad = /(vision|image|tts|audio|embedding|aqa|live|thinking|exp|preview|pro)/i;
     const names = ((await res.json()).models || [])
       .filter(m => (m.supportedGenerationMethods || []).includes("generateContent"))
       .map(m => (m.name || "").replace(/^models\//, ""))
-      .filter(Boolean);
-    const bad = /(vision|image|tts|audio|embedding|aqa|live|thinking|exp)/i;
-    const pick =
-      names.find(n => /^gemini-2\.0-flash$/.test(n)) ||
-      names.find(n => /^gemini-2\.5-flash$/.test(n)) ||
-      names.find(n => /^gemini-flash-latest$/.test(n)) ||
-      names.find(n => /flash/i.test(n) && !bad.test(n)) ||
-      names.find(n => /^gemini/i.test(n) && !bad.test(n)) ||
-      names[0];
-    if (!pick) { const e = new Error("This key exposes no text-generation models."); e.status = 0; throw e; }
-    discoveredModel = pick;
-    return pick;
+      .filter(n => n && !bad.test(n));
+    const score = n => (/(flash)/i.test(n) ? 100 : 0) + (/lite/i.test(n) ? 45 : 0)
+      + (/2\.5/.test(n) ? 20 : /2\.0/.test(n) ? 15 : 0) + (/gemma/i.test(n) ? 35 : 0) + (/latest/i.test(n) ? 5 : 0);
+    modelOrder = names.sort((a, b) => score(b) - score(a)).slice(0, 8);
+    if (!modelOrder.length) { const e = new Error("This key exposes no text-generation models."); e.status = 0; throw e; }
+    return modelOrder;
   }
 
   async function fetchExplanation(card, key) {
@@ -471,46 +466,54 @@ Guidelines:
 - Include one simple real-world analogy.
 - No markdown headings or bullet lists. You may use inline math wrapped in single dollar signs.`;
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 30000);
+    const timer = setTimeout(() => ctrl.abort(), 40000);
     const keyHint = "  ·  Re-check your key in Settings — it must be a Google AI Studio key (starts with \"AIza…\") with the Generative Language API enabled.";
+    async function gen(model) {
+      return fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7, maxOutputTokens: 320 } }),
+        signal: ctrl.signal
+      });
+    }
     try {
-      // 1) discover a usable model for this key
-      let model;
-      try {
-        model = await pickModel(key, ctrl.signal);
-      } catch (e) {
-        if (e.name === "AbortError") throw new Error("Request timed out — check your connection and retry.");
-        if (e.status === 400 || e.status === 401 || e.status === 403) throw new Error(e.message + keyHint);
-        throw new Error("Couldn't list models for this key: " + e.message);
+      let candidates;
+      if (workingModel) candidates = [workingModel];
+      else {
+        try { candidates = await listCandidates(key, ctrl.signal); }
+        catch (e) {
+          if (e.name === "AbortError") throw new Error("Request timed out — check your connection and retry.");
+          if (e.status === 400 || e.status === 401 || e.status === 403) throw new Error(e.message + keyHint);
+          throw new Error("Couldn't list models for this key: " + e.message);
+        }
       }
 
-      // 2) call it
-      let res;
-      try {
-        res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7, maxOutputTokens: 320 } }),
-          signal: ctrl.signal
-        });
-      } catch (e) {
-        if (e.name === "AbortError") throw new Error("Request timed out — check your connection and retry.");
-        throw new Error("Network error reaching Google — check your connection.");
+      let quotaMsg = null, lastMsg = "No model returned a response.", lastModel = "";
+      for (const model of candidates) {
+        let res;
+        try { res = await gen(model); }
+        catch (e) {
+          if (e.name === "AbortError") throw new Error("Request timed out — check your connection and retry.");
+          throw new Error("Network error reaching Google — check your connection.");
+        }
+        if (res.ok) {
+          const data = await res.json();
+          const txt = (data.candidates?.[0]?.content?.parts || []).map(p => p.text || "").join("").trim();
+          if (txt) { workingModel = model; return txt; }       // remember the model that worked
+          lastMsg = data.promptFeedback?.blockReason ? "Response blocked by a safety filter." : "Empty response."; lastModel = model;
+          continue;
+        }
+        let gmsg = `HTTP ${res.status}`;
+        try { gmsg = (await res.json()).error?.message || gmsg; } catch {}
+        lastMsg = gmsg; lastModel = model;
+        if (res.status === 400 || res.status === 401 || res.status === 403) throw new Error(gmsg + keyHint);
+        if (res.status === 429) { quotaMsg = gmsg; continue; }  // another model may still have free quota
+        // 404 / 5xx → try the next candidate
       }
 
-      if (res.ok) {
-        const data = await res.json();
-        const txt = (data.candidates?.[0]?.content?.parts || []).map(p => p.text || "").join("").trim();
-        if (txt) return txt;
-        throw new Error(data.promptFeedback?.blockReason ? "Response blocked by a safety filter." : "Empty response from the model.");
-      }
-
-      let gmsg = `HTTP ${res.status}`;
-      try { gmsg = (await res.json()).error?.message || gmsg; } catch {}
-      discoveredModel = null;                              // re-discover next time
-      if (res.status === 400 || res.status === 401 || res.status === 403) throw new Error(gmsg + keyHint);
-      if (res.status === 429) throw new Error(`Using "${model}": ${gmsg}  ·  This means no quota for your account/region. Fix: in Google AI Studio enable billing on the key's project (Gemini Flash is ~$0.0001 per explanation) or use a different Google account.`);
-      throw new Error(`Using "${model}": ${gmsg}`);
+      workingModel = null;
+      if (quotaMsg) throw new Error(`No free quota on any of your ${candidates.length} available models. Google: ${quotaMsg}  ·  Since Puerto Rico is eligible, this usually means the key's project isn't on the free tier — create a NEW key in a NEW project at aistudio.google.com/apikey, or enable billing (Gemini Flash ≈ $0.0001 per explanation).`);
+      throw new Error(`Using "${lastModel}": ${lastMsg}`);
     } finally { clearTimeout(timer); }
   }
 
