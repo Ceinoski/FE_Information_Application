@@ -1,7 +1,8 @@
 /* FE Feed — service worker
  * App-shell precache + runtime cache for fonts/KaTeX so the app works offline.
  */
-const VERSION = "fefeed-v1";
+// Bump this version string on every deploy so clients re-cache updated files.
+const VERSION = "fefeed-v2";
 const SHELL = [
   "./",
   "./index.html",
