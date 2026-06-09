@@ -352,8 +352,8 @@
      The key lives only in localStorage and is sent straight from the
      browser to Google; it is never bundled into the app or the repo.
      ============================================================ */
-  // Tried in order — if one model has no quota (429) or isn't available (404), fall through to the next.
-  const AI_MODELS = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-flash-latest", "gemini-1.5-flash"];
+  // Discovered at runtime from the key's own ListModels response (cached per session).
+  let discoveredModel = null;
   const sheetBackdrop = $("#sheetBackdrop"), explainSheet = $("#explainSheet"), exBodyEl = $("#exBody");
   let exReq = 0, exOpen = false;
 
@@ -428,6 +428,34 @@
     });
   }
 
+  // Ask the key what models it can actually use, then pick the best fast text model.
+  async function pickModel(key, signal) {
+    if (discoveredModel) return discoveredModel;
+    const res = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200", {
+      headers: { "x-goog-api-key": key }, signal
+    });
+    if (!res.ok) {
+      let m = `HTTP ${res.status}`;
+      try { m = (await res.json()).error?.message || m; } catch {}
+      const err = new Error(m); err.status = res.status; throw err;
+    }
+    const names = ((await res.json()).models || [])
+      .filter(m => (m.supportedGenerationMethods || []).includes("generateContent"))
+      .map(m => (m.name || "").replace(/^models\//, ""))
+      .filter(Boolean);
+    const bad = /(vision|image|tts|audio|embedding|aqa|live|thinking|exp)/i;
+    const pick =
+      names.find(n => /^gemini-2\.0-flash$/.test(n)) ||
+      names.find(n => /^gemini-2\.5-flash$/.test(n)) ||
+      names.find(n => /^gemini-flash-latest$/.test(n)) ||
+      names.find(n => /flash/i.test(n) && !bad.test(n)) ||
+      names.find(n => /^gemini/i.test(n) && !bad.test(n)) ||
+      names[0];
+    if (!pick) { const e = new Error("This key exposes no text-generation models."); e.status = 0; throw e; }
+    discoveredModel = pick;
+    return pick;
+  }
+
   async function fetchExplanation(card, key) {
     const tm = topicMeta(card.t);
     const prompt =
@@ -444,43 +472,45 @@ Guidelines:
 - No markdown headings or bullet lists. You may use inline math wrapped in single dollar signs.`;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 30000);
-    let lastErr = "No model returned a response.";
+    const keyHint = "  ·  Re-check your key in Settings — it must be a Google AI Studio key (starts with \"AIza…\") with the Generative Language API enabled.";
     try {
-      for (const model of AI_MODELS) {
-        let res;
-        try {
-          res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7, maxOutputTokens: 320 } }),
-            signal: ctrl.signal
-          });
-        } catch (e) {
-          if (e.name === "AbortError") throw new Error("Request timed out — check your connection and retry.");
-          throw new Error("Network error reaching Google — check your connection.");
-        }
-
-        if (res.ok) {
-          const data = await res.json();
-          const txt = (data.candidates?.[0]?.content?.parts || []).map(p => p.text || "").join("").trim();
-          if (txt) return txt;
-          lastErr = data.promptFeedback?.blockReason ? "Response blocked by a safety filter." : "Empty response from the model.";
-          continue;                                   // try the next model
-        }
-
-        // Surface Google's real error message (this is what was being hidden before)
-        let gmsg = `HTTP ${res.status}`;
-        try { gmsg = (await res.json()).error?.message || gmsg; } catch {}
-        lastErr = `[${model}] ${gmsg}`;
-
-        // A bad/disabled key won't be fixed by trying other models — stop and explain.
-        if (res.status === 400 || res.status === 401 || res.status === 403) {
-          throw new Error(gmsg + "  ·  Open Settings and re-check your key — it must be a Google AI Studio key (starts with \"AIza…\") with the Generative Language API enabled.");
-        }
-        // 404 (model not available here) or 429 (no quota for this model) → fall through to next model
+      // 1) discover a usable model for this key
+      let model;
+      try {
+        model = await pickModel(key, ctrl.signal);
+      } catch (e) {
+        if (e.name === "AbortError") throw new Error("Request timed out — check your connection and retry.");
+        if (e.status === 400 || e.status === 401 || e.status === 403) throw new Error(e.message + keyHint);
+        throw new Error("Couldn't list models for this key: " + e.message);
       }
-      // every model failed
-      throw new Error(lastErr + "  ·  Your key's project appears to have no free-tier quota for these models (common in some regions). Fix: in Google AI Studio create the key inside a project with billing enabled — Gemini Flash costs a tiny fraction of a cent per explanation — or try a different Google account.");
+
+      // 2) call it
+      let res;
+      try {
+        res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+          body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7, maxOutputTokens: 320 } }),
+          signal: ctrl.signal
+        });
+      } catch (e) {
+        if (e.name === "AbortError") throw new Error("Request timed out — check your connection and retry.");
+        throw new Error("Network error reaching Google — check your connection.");
+      }
+
+      if (res.ok) {
+        const data = await res.json();
+        const txt = (data.candidates?.[0]?.content?.parts || []).map(p => p.text || "").join("").trim();
+        if (txt) return txt;
+        throw new Error(data.promptFeedback?.blockReason ? "Response blocked by a safety filter." : "Empty response from the model.");
+      }
+
+      let gmsg = `HTTP ${res.status}`;
+      try { gmsg = (await res.json()).error?.message || gmsg; } catch {}
+      discoveredModel = null;                              // re-discover next time
+      if (res.status === 400 || res.status === 401 || res.status === 403) throw new Error(gmsg + keyHint);
+      if (res.status === 429) throw new Error(`Using "${model}": ${gmsg}  ·  This means no quota for your account/region. Fix: in Google AI Studio enable billing on the key's project (Gemini Flash is ~$0.0001 per explanation) or use a different Google account.`);
+      throw new Error(`Using "${model}": ${gmsg}`);
     } finally { clearTimeout(timer); }
   }
 
