@@ -514,3 +514,59 @@ b { font-weight: 700; }
 @media (min-width: 561px) {
   .app { border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
 }
+
+/* ============================================================
+   AI "Explain" — rail button, settings field, bottom sheet
+   ============================================================ */
+.rail__explain .bubble { background: var(--accent); border-color: transparent; }
+.rail__explain .icon { fill: #04222a; stroke: none; }
+.rail__explain small { color: var(--text); }
+
+/* settings: API key field */
+.field { display: grid; gap: 6px; padding: var(--s4); border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--border); }
+.field__label { font-size: 14.5px; font-weight: 600; }
+.field__hint { font-size: 12px; color: var(--text-mute); line-height: 1.5; }
+.field__hint .link { color: var(--primary); }
+.field__row { display: flex; gap: var(--s2); }
+.field__input { flex: 1; min-width: 0; padding: 11px 13px; border-radius: var(--r-sm); background: var(--surface-2); border: 1px solid var(--border-strong); color: var(--text); font-size: 14px; font-family: var(--font-mono); }
+.field__input::placeholder { color: var(--text-mute); }
+.field__row .btn-ghost { padding-inline: 18px; }
+.field__status { font-size: 12px; color: var(--text-mute); min-height: 1em; }
+.field__status.ok { color: var(--success); }
+
+/* bottom sheet */
+.explain-sheet {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: var(--z-modal);
+  background: var(--surface); border: 1px solid var(--border-strong); border-bottom: none;
+  border-radius: var(--r-xl) var(--r-xl) 0 0;
+  padding: var(--s3) var(--s5) calc(env(safe-area-inset-bottom) + var(--s5));
+  max-height: 80dvh; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  transform: translateY(101%); transition: transform var(--t-mid) var(--ease-out);
+  box-shadow: 0 -18px 50px -12px rgba(0,0,0,.6);
+}
+.explain-sheet.show { transform: translateY(0); }
+.explain-sheet__grip { width: 40px; height: 4px; border-radius: var(--r-pill); background: var(--border-strong); margin: 6px auto var(--s3); }
+.explain-sheet__head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--s3); }
+.explain-sheet__badge { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--primary); }
+.explain-sheet__badge svg { width: 16px; height: 16px; fill: var(--primary); stroke: none; }
+.explain-sheet__close { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; color: var(--text-dim); background: var(--surface-2); }
+.explain-sheet__close svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.explain-sheet__title { font-family: var(--font-display); font-size: 21px; font-weight: 700; line-height: 1.15; margin-bottom: var(--s4); }
+.explain-sheet__body { font-size: 15.5px; line-height: 1.62; color: var(--text); }
+.explain-sheet__body p { margin-bottom: var(--s3); }
+.explain-sheet__body p:last-child { margin-bottom: 0; }
+.explain-sheet__body .katex { font-size: 1em; }
+
+/* loading shimmer */
+.explain-loading { display: grid; gap: 11px; }
+.explain-loading i { height: 13px; border-radius: 6px; background: linear-gradient(90deg, var(--surface-2), var(--border-strong), var(--surface-2)); background-size: 200% 100%; animation: shimmer 1.2s linear infinite; }
+.explain-loading i:nth-child(4) { width: 62%; }
+.explain-loading .thinking { font-size: 12.5px; color: var(--text-mute); font-family: var(--font-mono); margin-top: 2px; }
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+/* empty (no key) + error states */
+.explain-cta { display: grid; gap: var(--s3); justify-items: start; }
+.explain-cta p { color: var(--text-dim); font-size: 14.5px; line-height: 1.55; }
+.explain-cta .btn-primary { padding: 12px 22px; }
+.explain-error__detail { font-family: var(--font-mono); font-size: 11.5px; color: var(--text-mute); word-break: break-word; background: var(--surface-2); border-radius: var(--r-sm); padding: 8px 10px; }
+.explain-disclaimer { margin-top: var(--s4); font-size: 11px; color: var(--text-mute); border-top: 1px solid var(--border); padding-top: var(--s3); }

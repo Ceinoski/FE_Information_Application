@@ -131,6 +131,17 @@
             <input type="checkbox" id="themeToggle" />
             <i class="switch__track"><i class="switch__thumb"></i></i>
           </label>
+
+          <div class="field">
+            <label class="field__label" for="aiKey">AI explanations · Gemini API key</label>
+            <p class="field__hint">Powers the <b>Explain</b> button. Stored only on this device — never uploaded. Get a free key at <span class="link">aistudio.google.com/apikey</span>.</p>
+            <div class="field__row">
+              <input id="aiKey" class="field__input" type="password" inputmode="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="AIza…" />
+              <button class="btn-ghost" id="aiKeySave">Save</button>
+            </div>
+            <p class="field__status" id="aiKeyStatus"></p>
+          </div>
+
           <button class="btn-ghost btn-block danger" id="resetBtn">Reset all progress</button>
           <p class="fineprint">Built for the NCEES FE Electrical &amp; Computer exam. Everything is stored on this device only.</p>
         </div>
@@ -168,6 +179,23 @@
       <h2 id="msTitle">Level up!</h2>
       <p id="msBody">Nice work.</p>
       <button class="btn-primary" id="msClose">Keep going</button>
+    </div>
+
+    <!-- Explain bottom sheet (AI) -->
+    <div class="sheet-backdrop" id="sheetBackdrop" hidden></div>
+    <div class="explain-sheet" id="explainSheet" role="dialog" aria-modal="true" aria-labelledby="exTitle" hidden>
+      <div class="explain-sheet__grip" id="exGrip"></div>
+      <div class="explain-sheet__head">
+        <span class="explain-sheet__badge">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.7 4.6L18 9l-4.3 1.4L12 15l-1.7-4.6L6 9l4.3-1.4zM18 14l.9 2.2L21 17l-2.1.8L18 20l-.9-2.2L15 17l2.1-.8z"/></svg>
+          Explain simply
+        </span>
+        <button class="explain-sheet__close" id="exClose" aria-label="Close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <h3 id="exTitle" class="explain-sheet__title"></h3>
+      <div class="explain-sheet__body" id="exBody"></div>
     </div>
 
     <!-- First-run coach mark -->

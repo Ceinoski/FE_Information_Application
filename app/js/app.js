@@ -27,7 +27,8 @@
     goalTarget: 20,
     badges: [],        // unlocked achievement ids
     topicsSeen: [],    // distinct topic keys seen
-    settings: { hideMastered: false, theme: "dark", coached: false }
+    explains: {},      // cache: cardId -> AI explanation text (saved on device)
+    settings: { hideMastered: false, theme: "dark", coached: false, aiKey: "" }
   });
   let S = load();
   function load() {
@@ -144,6 +145,10 @@
       <p class="card__body"></p>
       ${c.ref ? `<div class="card__ref">${escapeHtml(c.ref)}</div>` : ""}
       <div class="rail">
+        <button class="rail__btn rail__explain" aria-label="Explain this simply">
+          <span class="bubble">${svgPath("M12 3l1.7 4.6L18 9l-4.3 1.4L12 15l-1.7-4.6L6 9l4.3-1.4zM18 14l.9 2.2L21 17l-2.1.8L18 20l-.9-2.2L15 17l2.1-.8z")}</span>
+          <small>Explain</small>
+        </button>
         <button class="rail__btn rail__save ${saved ? "on" : ""}" aria-pressed="${saved}" aria-label="Save card">
           <span class="bubble">${svgPath("M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z")}</span>
           <small>Save</small>
@@ -177,6 +182,7 @@
     saveBtn.addEventListener("click", () => toggleSave(c, el, saveBtn));
     masterBtn.addEventListener("click", () => toggleMaster(c, el, masterBtn));
     el.querySelector(".rail__share").addEventListener("click", () => shareCard(c));
+    el.querySelector(".rail__explain").addEventListener("click", () => openExplain(c));
     attachDoubleTap(el, c, saveBtn);
 
     formulaObserver.observe(el);
@@ -339,6 +345,126 @@
     h.style.top = ((ev.clientY || rect.top + rect.height / 2) - rect.top) + "px";
     el.appendChild(h);
     setTimeout(() => h.remove(), 720);
+  }
+
+  /* ============================================================
+     AI "Explain simply" — bring-your-own Gemini key, stored on device.
+     The key lives only in localStorage and is sent straight from the
+     browser to Google; it is never bundled into the app or the repo.
+     ============================================================ */
+  const AI_MODEL = "gemini-2.0-flash";
+  const sheetBackdrop = $("#sheetBackdrop"), explainSheet = $("#explainSheet"), exBodyEl = $("#exBody");
+  let exReq = 0, exOpen = false;
+
+  function showSheet() {
+    sheetBackdrop.hidden = false; explainSheet.hidden = false; exOpen = true;
+    requestAnimationFrame(() => { sheetBackdrop.classList.add("show"); explainSheet.classList.add("show"); });
+  }
+  function closeSheet() {
+    exOpen = false; exReq++;                       // invalidate any in-flight render
+    sheetBackdrop.classList.remove("show"); explainSheet.classList.remove("show");
+    setTimeout(() => { sheetBackdrop.hidden = true; explainSheet.hidden = true; }, 260);
+  }
+  $("#exClose").addEventListener("click", closeSheet);
+  sheetBackdrop.addEventListener("click", closeSheet);
+
+  const DISCLAIMER = `<p class="explain-disclaimer">AI-generated to aid understanding — always verify against the NCEES FE Reference Handbook.</p>`;
+
+  function renderExplain(text) {
+    exBodyEl.innerHTML = "";
+    text.split(/\n{2,}/).forEach(para => {
+      if (!para.trim()) return;
+      const p = document.createElement("p");
+      para.split(/(\$\$[^$]+\$\$|\$[^$]+\$)/g).forEach(tok => {
+        const disp = /^\$\$[^$]+\$\$$/.test(tok), inl = /^\$[^$]+\$$/.test(tok);
+        if (disp || inl) {
+          const span = document.createElement("span");
+          renderFormula(span, tok.replace(/^\$+|\$+$/g, ""), disp);
+          p.appendChild(span);
+        } else {
+          tok.split(/(\*\*[^*]+\*\*)/g).forEach(f => {
+            if (/^\*\*[^*]+\*\*$/.test(f)) { const b = document.createElement("b"); b.textContent = f.slice(2, -2); p.appendChild(b); }
+            else if (f) p.appendChild(document.createTextNode(f));
+          });
+        }
+      });
+      exBodyEl.appendChild(p);
+    });
+    exBodyEl.insertAdjacentHTML("beforeend", DISCLAIMER);
+  }
+
+  function openExplain(card) {
+    $("#exTitle").textContent = card.title;
+    showSheet();
+    const cached = S.explains[card.id];
+    if (cached) { renderExplain(cached); return; }
+
+    const key = (S.settings.aiKey || "").trim();
+    if (!key) {
+      exBodyEl.innerHTML = `<div class="explain-cta">
+        <p>Add your free Google Gemini API key to unlock plain-language explanations for any card.</p>
+        <button class="btn-primary" id="exAddKey">Add API key</button>
+        <p class="explain-disclaimer">Get one at aistudio.google.com/apikey · stored only on this device.</p></div>`;
+      $("#exAddKey").addEventListener("click", () => {
+        closeSheet(); go("stats");
+        setTimeout(() => { const k = $("#aiKey"); k.scrollIntoView({ block: "center" }); k.focus(); }, 340);
+      });
+      return;
+    }
+
+    const my = ++exReq;
+    exBodyEl.innerHTML = `<div class="explain-loading"><i></i><i></i><i></i><i></i><div class="thinking">Thinking…</div></div>`;
+    fetchExplanation(card, key).then(txt => {
+      S.explains[card.id] = txt; persist();
+      if (exOpen && my === exReq) { renderExplain(txt); addXP(3); }
+    }).catch(err => {
+      if (!exOpen || my !== exReq) return;
+      exBodyEl.innerHTML = `<div class="explain-cta">
+        <p>Couldn't fetch an explanation.</p>
+        <div class="explain-error__detail">${escapeHtml(String(err && err.message || err))}</div>
+        <button class="btn-primary" id="exRetry">Try again</button></div>`;
+      $("#exRetry").addEventListener("click", () => openExplain(card));
+    });
+  }
+
+  async function fetchExplanation(card, key) {
+    const tm = topicMeta(card.t);
+    const prompt =
+`You are a warm, encouraging tutor helping a student prepare for the NCEES FE Electrical & Computer exam. Explain the concept below as if it is the student's very first time encountering it.
+
+Topic: ${tm.name}
+Concept: ${card.title}
+What the flashcard says: ${card.body}${card.formula ? `\nFormula (LaTeX): ${card.formula}` : ""}
+
+Guidelines:
+- At most about 110 words, in 1-2 short paragraphs.
+- Plain, everyday language. Define every symbol in words.
+- Include one simple real-world analogy.
+- No markdown headings or bullet lists. You may use inline math wrapped in single dollar signs.`;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 30000);
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${AI_MODEL}:generateContent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7, maxOutputTokens: 320 } }),
+        signal: ctrl.signal
+      });
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try { detail = (await res.json()).error?.message || detail; } catch {}
+        if (res.status === 400 || res.status === 403) detail += " — check the key is valid and the Generative Language API is enabled.";
+        if (res.status === 429) detail = "Free-tier rate limit reached. Wait a minute and try again.";
+        throw new Error(detail);
+      }
+      const data = await res.json();
+      const txt = (data.candidates?.[0]?.content?.parts || []).map(p => p.text || "").join("").trim();
+      if (!txt) throw new Error(data.promptFeedback?.blockReason ? "Response blocked by a safety filter." : "Empty response from the model.");
+      return txt;
+    } catch (e) {
+      if (e.name === "AbortError") throw new Error("Request timed out — check your connection and retry.");
+      throw e;
+    } finally { clearTimeout(timer); }
   }
 
   /* ============================================================
@@ -589,6 +715,20 @@
   themeEl.checked = S.settings.theme === "light";
   hideMasteredEl.addEventListener("change", () => { S.settings.hideMastered = hideMasteredEl.checked; persist(); toast(hideMasteredEl.checked ? "Hiding mastered cards" : "Showing all cards"); });
   themeEl.addEventListener("change", () => { S.settings.theme = themeEl.checked ? "light" : "dark"; applyTheme(); persist(); });
+
+  // AI key (stored on device only)
+  const aiKeyEl = $("#aiKey"), aiKeyStatusEl = $("#aiKeyStatus");
+  aiKeyEl.value = S.settings.aiKey || "";
+  function refreshKeyStatus() {
+    const k = (S.settings.aiKey || "").trim();
+    aiKeyStatusEl.textContent = k ? `Key saved (…${k.slice(-4)}). Explain is enabled.` : "No key saved — Explain will ask you to add one.";
+    aiKeyStatusEl.classList.toggle("ok", !!k);
+  }
+  refreshKeyStatus();
+  $("#aiKeySave").addEventListener("click", () => {
+    S.settings.aiKey = aiKeyEl.value.trim(); persist(); refreshKeyStatus();
+    toast(S.settings.aiKey ? "API key saved on this device" : "API key cleared");
+  });
   function applyTheme() {
     $("#app").dataset.theme = S.settings.theme;
     $('meta[name="theme-color"]').setAttribute("content", S.settings.theme === "light" ? "#EEF1F8" : "#0B0F1A");
@@ -610,7 +750,11 @@
   function escapeAttr(s) { return escapeHtml(s); }
 
   window.addEventListener("resize", () => { if (raf) sizeCanvas(); });
-  window.addEventListener("keydown", e => { if (e.key === "Escape" && !milestone.hidden) closeMilestone(); });
+  window.addEventListener("keydown", e => {
+    if (e.key !== "Escape") return;
+    if (exOpen) closeSheet();
+    else if (!milestone.hidden) closeMilestone();
+  });
 
   /* ============================================================
      Boot
