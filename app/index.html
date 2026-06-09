@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=5" />
+  <meta name="theme-color" content="#0B0F1A" />
+  <meta name="description" content="FE Feed — addictive, bite-sized study cards for the FE Electrical & Computer exam." />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="FE Feed" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <title>FE Feed — Study for the FE Electrical Exam</title>
+
+  <!-- Fonts (graceful system fallbacks if offline) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
+
+  <!-- KaTeX for beautiful formula rendering (cached by the service worker for offline use) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" crossorigin="anonymous" />
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" crossorigin="anonymous"></script>
+
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <div id="app" class="app" data-theme="dark">
+
+    <!-- ░░ Top status bar (visible on Feed) ░░ -->
+    <header class="topbar" id="topbar">
+      <button class="topbar__streak" id="streakBtn" aria-label="Your study streak">
+        <svg viewBox="0 0 24 24" class="icon" aria-hidden="true"><path d="M12 3c1 3-1 4-1 6a3 3 0 0 0 6 0c0-1 1 2 1 4a6 6 0 1 1-11.5-2.3C7.7 7.7 11 6 12 3z"/></svg>
+        <span id="streakCount">0</span>
+      </button>
+
+      <button class="topbar__goal" id="goalBtn" aria-label="Daily goal progress">
+        <svg viewBox="0 0 44 44" class="goal-ring" aria-hidden="true">
+          <circle class="goal-ring__track" cx="22" cy="22" r="18"/>
+          <circle class="goal-ring__fill" id="goalRingFill" cx="22" cy="22" r="18"/>
+        </svg>
+        <span class="goal-ring__label"><span id="goalDone">0</span><small>/<span id="goalTarget">20</span></small></span>
+      </button>
+
+      <button class="topbar__xp" id="xpBtn" aria-label="Your level and experience">
+        <span class="lvl">Lv <b id="levelNum">1</b></span>
+        <span class="xpbar"><i id="xpBarFill"></i></span>
+      </button>
+    </header>
+
+    <main class="screens">
+      <!-- ░░ FEED ░░ -->
+      <section id="screen-feed" class="screen screen--feed is-active" aria-label="Knowledge feed">
+        <div class="feed-track" id="feedTrack"><!-- cards injected by app.js --></div>
+      </section>
+
+      <!-- ░░ TOPICS ░░ -->
+      <section id="screen-topics" class="screen screen--scroll" aria-label="Topics" hidden>
+        <div class="screen__head">
+          <h1>Topics</h1>
+          <p class="muted">Tap a topic to dive into its feed.</p>
+        </div>
+        <button class="topic-all" id="topicAll">
+          <span class="topic-all__title">Shuffle Everything</span>
+          <span class="topic-all__sub">All <b id="allCount">0</b> cards · mixed</span>
+          <svg viewBox="0 0 24 24" class="icon"><path d="M16 3h5v5M21 3l-7 7M8 21H3v-5M3 21l7-7M21 16v5h-5M14 14l7 7M3 8V3h5M10 10 3 3"/></svg>
+        </button>
+        <div class="topic-grid" id="topicGrid"></div>
+      </section>
+
+      <!-- ░░ SAVED ░░ -->
+      <section id="screen-saved" class="screen screen--scroll" aria-label="Saved cards" hidden>
+        <div class="screen__head">
+          <h1>Saved</h1>
+          <p class="muted">Your bookmarked cards. Double-tap any feed card to save it.</p>
+        </div>
+        <button class="btn-primary btn-block" id="studySavedBtn" hidden>Study saved in the feed</button>
+        <div class="saved-list" id="savedList"></div>
+        <div class="empty" id="savedEmpty">
+          <svg viewBox="0 0 24 24" class="empty__icon"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg>
+          <h3>No saved cards yet</h3>
+          <p>While studying, tap the bookmark or double-tap a card to stash the ones you want to revisit.</p>
+        </div>
+      </section>
+
+      <!-- ░░ STATS ░░ -->
+      <section id="screen-stats" class="screen screen--scroll" aria-label="Your stats" hidden>
+        <div class="screen__head">
+          <h1>Your Progress</h1>
+          <p class="muted" id="statsGreeting">Keep the streak alive.</p>
+        </div>
+
+        <div class="bento">
+          <div class="bento__cell bento__cell--streak">
+            <span class="bento__num" id="bStreak">0</span>
+            <span class="bento__lbl">Day streak</span>
+            <svg viewBox="0 0 24 24" class="bento__deco"><path d="M12 3c1 3-1 4-1 6a3 3 0 0 0 6 0c0-1 1 2 1 4a6 6 0 1 1-11.5-2.3C7.7 7.7 11 6 12 3z"/></svg>
+          </div>
+          <div class="bento__cell">
+            <span class="bento__num" id="bSeen">0</span>
+            <span class="bento__lbl">Cards seen</span>
+          </div>
+          <div class="bento__cell">
+            <span class="bento__num" id="bMastered">0</span>
+            <span class="bento__lbl">Mastered</span>
+          </div>
+          <div class="bento__cell">
+            <span class="bento__num"><span id="bLevel">1</span></span>
+            <span class="bento__lbl">Level · <span id="bXp">0</span> XP</span>
+          </div>
+          <div class="bento__cell bento__cell--wide">
+            <div class="bento__row"><span class="bento__lbl">Today's goal</span><span id="bGoalTxt" class="bento__chip">0 / 20</span></div>
+            <div class="progress"><i id="bGoalBar"></i></div>
+          </div>
+        </div>
+
+        <h2 class="section-title">Mastery by topic</h2>
+        <div class="topic-progress" id="topicProgress"></div>
+
+        <h2 class="section-title">Achievements</h2>
+        <div class="badges" id="badges"></div>
+
+        <div class="settings">
+          <label class="switch">
+            <span>Hide mastered cards in feed</span>
+            <input type="checkbox" id="hideMastered" />
+            <i class="switch__track"><i class="switch__thumb"></i></i>
+          </label>
+          <label class="switch">
+            <span>Light theme</span>
+            <input type="checkbox" id="themeToggle" />
+            <i class="switch__track"><i class="switch__thumb"></i></i>
+          </label>
+          <button class="btn-ghost btn-block danger" id="resetBtn">Reset all progress</button>
+          <p class="fineprint">Built for the NCEES FE Electrical &amp; Computer exam. Everything is stored on this device only.</p>
+        </div>
+      </section>
+    </main>
+
+    <!-- ░░ Bottom navigation ░░ -->
+    <nav class="tabbar" id="tabbar" aria-label="Primary">
+      <button class="tab is-active" data-screen="feed" aria-label="Feed">
+        <svg viewBox="0 0 24 24" class="icon"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+        <span>Feed</span>
+      </button>
+      <button class="tab" data-screen="topics" aria-label="Topics">
+        <svg viewBox="0 0 24 24" class="icon"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg>
+        <span>Topics</span>
+      </button>
+      <button class="tab" data-screen="saved" aria-label="Saved">
+        <svg viewBox="0 0 24 24" class="icon"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg>
+        <span>Saved</span>
+        <i class="tab__badge" id="savedBadge" hidden>0</i>
+      </button>
+      <button class="tab" data-screen="stats" aria-label="Stats">
+        <svg viewBox="0 0 24 24" class="icon"><path d="M5 19V9m7 10V5m7 14v-7M3 21h18"/></svg>
+        <span>Stats</span>
+      </button>
+    </nav>
+
+    <!-- ░░ Overlays ░░ -->
+    <canvas id="confetti" class="confetti" aria-hidden="true"></canvas>
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+    <div class="sheet-backdrop" id="modalBackdrop" hidden></div>
+    <div class="modal" id="milestone" role="dialog" aria-modal="true" aria-labelledby="msTitle" hidden>
+      <div class="modal__burst" id="msBurst"></div>
+      <h2 id="msTitle">Level up!</h2>
+      <p id="msBody">Nice work.</p>
+      <button class="btn-primary" id="msClose">Keep going</button>
+    </div>
+
+    <!-- First-run coach mark -->
+    <div class="coach" id="coach" hidden>
+      <div class="coach__card">
+        <div class="coach__swipe" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M12 20V6M6 12l6-6 6 6"/></svg>
+        </div>
+        <h2>Swipe up to learn</h2>
+        <p>Flip through bite-sized formulas &amp; facts. <b>Double-tap</b> to save, hit <b>✓</b> when you've got it. Build a daily streak.</p>
+        <button class="btn-primary" id="coachStart">Let's go</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- data + app -->
+  <script src="data/topics.js"></script>
+  <script src="data/cards.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
