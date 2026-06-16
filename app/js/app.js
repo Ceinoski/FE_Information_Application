@@ -454,16 +454,19 @@
   async function fetchExplanation(card, key) {
     const tm = topicMeta(card.t);
     const prompt =
-`You are a warm, encouraging tutor helping a student prepare for the NCEES FE Electrical & Computer exam. Explain the concept below as if it is the student's very first time encountering it.
+`You are a concise, technical tutor helping a student prepare for the NCEES FE Electrical & Computer exam. Explain the concept below as if you are teaching it to the student for the very first time.
 
 Topic: ${tm.name}
 Concept: ${card.title}
 What the flashcard says: ${card.body}${card.formula ? `\nFormula (LaTeX): ${card.formula}` : ""}
 
 Guidelines:
-- At most about 110 words, in 1-2 short paragraphs.
-- Plain, everyday language. Define every symbol in words.
-- Include one simple real-world analogy.
+- At most about 150 words, in 1-2 short paragraphs.
+- Plain, everyday language. 
+- Be technically precise — use correct engineering terminology
+- Walk through one concrete worked example or realistic engineering scenario that shows how to apply the concept.
+- If a formula is given, show what each variable represents in context of the example.
+- Close with one exam-strategy tip (e.g. common trap, unit watch, when to use this vs. a related method).
 - No markdown headings or bullet lists. You may use inline math wrapped in single dollar signs.`;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 40000);
@@ -472,7 +475,7 @@ Guidelines:
       return fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.7, maxOutputTokens: 320 } }),
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.5, maxOutputTokens: 380 } }),
         signal: ctrl.signal
       });
     }
