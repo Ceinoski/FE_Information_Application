@@ -68,6 +68,11 @@
         <div class="topic-grid" id="topicGrid"></div>
       </section>
 
+      <!-- ░░ QUIZ ░░ -->
+      <section id="screen-quiz" class="screen screen--scroll" aria-label="Quiz" hidden>
+        <div id="quizRoot"></div>
+      </section>
+
       <!-- ░░ SAVED ░░ -->
       <section id="screen-saved" class="screen screen--scroll" aria-label="Saved cards" hidden>
         <div class="screen__head">
@@ -158,6 +163,10 @@
         <svg viewBox="0 0 24 24" class="icon"><path d="M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z"/></svg>
         <span>Topics</span>
       </button>
+      <button class="tab" data-screen="quiz" aria-label="Quiz">
+        <svg viewBox="0 0 24 24" class="icon"><path d="M9 9a3 3 0 1 1 4 2.8c-.9.5-1 1-1 2.2M12 17h.01M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z"/></svg>
+        <span>Quiz</span>
+      </button>
       <button class="tab" data-screen="saved" aria-label="Saved">
         <svg viewBox="0 0 24 24" class="icon"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg>
         <span>Saved</span>
@@ -214,6 +223,7 @@
   <!-- data + app -->
   <script src="data/topics.js"></script>
   <script src="data/cards.js"></script>
+  <script src="data/quiz.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

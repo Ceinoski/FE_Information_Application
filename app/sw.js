@@ -2,7 +2,7 @@
  * App-shell precache + runtime cache for fonts/KaTeX so the app works offline.
  */
 // Bump this version string on every deploy so clients re-cache updated files.
-const VERSION = "fefeed-v5";
+const VERSION = "fefeed-v7";
 const SHELL = [
   "./",
   "./index.html",
@@ -10,6 +10,7 @@ const SHELL = [
   "./js/app.js",
   "./data/topics.js",
   "./data/cards.js",
+  "./data/quiz.js",
   "./manifest.webmanifest",
   "./icons/icon.svg",
   "./icons/icon-192.png",

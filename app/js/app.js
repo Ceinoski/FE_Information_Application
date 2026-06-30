@@ -7,6 +7,7 @@
 
   const TOPICS = window.FE_TOPICS || [];
   const CARDS = window.FE_CARDS || [];
+  const QUIZ = window.FE_QUIZ || [];
   const TOPIC_BY = Object.fromEntries(TOPICS.map(t => [t.key, t]));
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
@@ -28,6 +29,7 @@
     badges: [],        // unlocked achievement ids
     topicsSeen: [],    // distinct topic keys seen
     explains: {},      // cache: cardId -> AI explanation text (saved on device)
+    quiz: { best: 0, played: 0, answered: 0, correct: 0, bestCombo: 0, perfect: 0 },
     settings: { hideMastered: false, theme: "dark", coached: false, aiKey: "" }
   });
   let S = load();
@@ -35,7 +37,10 @@
     try {
       const raw = JSON.parse(localStorage.getItem(KEY));
       if (!raw) return defaults();
-      return Object.assign(defaults(), raw, { settings: Object.assign(defaults().settings, raw.settings || {}) });
+      return Object.assign(defaults(), raw, {
+        settings: Object.assign(defaults().settings, raw.settings || {}),
+        quiz: Object.assign(defaults().quiz, raw.quiz || {})
+      });
     } catch { return defaults(); }
   }
   let saveTimer = null;
@@ -604,7 +609,11 @@ Guidelines:
     { id: "master10", name: "Sharp Mind", color: "#3B82F6", icon: "M20 6 9 17l-5-5", test: () => masterSet.size >= 10 },
     { id: "master50", name: "FE Ready", color: "#84CC16", icon: "M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7l8-4z", test: () => masterSet.size >= 50 },
     { id: "explorer", name: "Polymath", color: "#EC4899", icon: "M12 2v20M2 12h20M5 5l14 14M19 5 5 19", test: () => topicSeenSet.size >= TOPICS.length },
-    { id: "level5", name: "Rising Star", color: "#FBBF24", icon: "M12 2l2.9 6.3 6.9.6-5.2 4.6 1.6 6.8L12 17.8 5.8 20l1.6-6.8L2.2 8.9l6.9-.6z", test: () => levelInfo(S.xp).level >= 5 }
+    { id: "level5", name: "Rising Star", color: "#FBBF24", icon: "M12 2l2.9 6.3 6.9.6-5.2 4.6 1.6 6.8L12 17.8 5.8 20l1.6-6.8L2.2 8.9l6.9-.6z", test: () => levelInfo(S.xp).level >= 5 },
+    { id: "quizrookie", name: "Quiz Rookie", color: "#06B6D4", icon: "M9 9a3 3 0 1 1 4 2.8c-.9.5-1 1-1 2.2M12 17h.01M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z", test: () => S.quiz.played >= 1 },
+    { id: "quizflawless", name: "Flawless", color: "#34D399", icon: "M22 4 12 14l-3-3M21 12a9 9 0 1 1-5-8", test: () => S.quiz.perfect >= 1 },
+    { id: "quizcombo", name: "Combo King", color: "#FB923C", icon: "M12 3c1 3-1 4-1 6a3 3 0 0 0 6 0c0-1 1 2 1 4a6 6 0 1 1-11.5-2.3C7.7 7.7 11 6 12 3z", test: () => S.quiz.bestCombo >= 8 },
+    { id: "quizmaster", name: "Quiz Master", color: "#A855F7", icon: "M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 5v5l3 2", test: () => S.quiz.answered >= 100 }
   ];
   function unlock(badgeId) {
     const a = ACHIEVEMENTS.find(x => x.id === badgeId);
@@ -616,7 +625,7 @@ Guidelines:
     if (newly) {
       persist();
       toast(`Achievement: ${newly.name} 🏅`);
-      if (["streak7", "master50", "explorer", "century"].includes(newly.id))
+      if (["streak7", "master50", "explorer", "century", "quizflawless", "quizmaster"].includes(newly.id))
         celebrate("Achievement unlocked!", "🏅", newly.name + " — you're crushing it.");
       else confettiBurst();
       if (currentScreen === "stats") renderBadges();
@@ -634,6 +643,7 @@ Guidelines:
     $$(".tab").forEach(t => t.classList.toggle("is-active", t.dataset.screen === screen));
     $("#topbar").classList.toggle("is-hidden", screen !== "feed");
     if (screen === "topics") renderTopics();
+    if (screen === "quiz") enterQuiz();
     if (screen === "saved") renderSaved();
     if (screen === "stats") renderStats();
   }
@@ -808,6 +818,287 @@ Guidelines:
     if (exOpen) closeSheet();
     else if (!milestone.hidden) closeMilestone();
   });
+
+  /* ============================================================
+     QUIZ — rapid-fire rounds. Mixes hand-authored theory questions
+     (FE_QUIZ) with questions auto-built from the verified card deck.
+     Engagement levers: build-and-break combo multiplier (loss aversion),
+     variable + speed XP bonuses, instant feedback, and a score to beat.
+     ============================================================ */
+  const quizRoot = $("#quizRoot");
+  const ROUND_LEN = 10;
+  const SPEED_S = 12;            // answer within this many seconds for a speed bonus
+  let qz = null;                 // active session, or null on the menu
+
+  function comboMult(streak) {
+    return streak >= 10 ? 3 : streak >= 7 ? 2.5 : streak >= 5 ? 2 : streak >= 3 ? 1.5 : 1;
+  }
+  function navHaptic(ms) { try { if (navigator.vibrate) navigator.vibrate(ms); } catch { /* unsupported */ } }
+
+  // Distractor cards pulled from the deck — same topic first so the choices aren't obvious.
+  function cardDistractors(card, n, keyFn, requireFormula) {
+    const base = CARDS.filter(c => c.id !== card.id && (!requireFormula || c.formula) && keyFn(c) !== keyFn(card));
+    const ordered = shuffle(base.filter(c => c.t === card.t)).concat(shuffle(base.filter(c => c.t !== card.t)));
+    const seen = new Set(), out = [];
+    for (const c of ordered) {
+      const k = keyFn(c);
+      if (seen.has(k)) continue;
+      seen.add(k); out.push(c);
+      if (out.length >= n) break;
+    }
+    return out;
+  }
+  // Shuffle a question's options while keeping track of where the answer landed.
+  function shuffleOptions(q) {
+    const correctOpt = q.options[q.answer];
+    q.options = shuffle(q.options.slice());
+    q.answer = q.options.indexOf(correctOpt);
+    return q;
+  }
+
+  function normalizeBank(item) {
+    return shuffleOptions({
+      topic: item.t, prompt: item.q, why: item.why, src: "bank",
+      options: item.opts.map(t => ({ text: t })), answer: 0
+    });
+  }
+  // Build an objective question straight from a verified card (no hallucination risk).
+  function autoQuestion(card) {
+    const type = (card.formula ? ["n2f", "f2n", "desc2name"] : ["desc2name"])[Math.random() * (card.formula ? 3 : 1) | 0];
+
+    if (type === "n2f") {
+      const ds = cardDistractors(card, 3, c => c.formula, true).map(c => ({ formula: c.formula }));
+      if (ds.length >= 3) return shuffleOptions({
+        topic: card.t, src: "auto", why: card.body, answer: 0,
+        prompt: `Which formula represents “${card.title}”?`,
+        options: [{ formula: card.formula }, ...ds]
+      });
+      // not enough distinct formulas → fall through to a description question
+    }
+    if (type === "f2n") {
+      const ds = cardDistractors(card, 3, c => c.title, false).map(c => ({ text: c.title }));
+      return shuffleOptions({
+        topic: card.t, src: "auto", answer: 0,
+        prompt: "Which concept does this formula represent?",
+        promptFormula: card.formula,
+        options: [{ text: card.title }, ...ds],
+        why: `${card.title}: ${card.body}`
+      });
+    }
+    // desc2name — read the description, identify the concept (distractors from the same topic).
+    const ds = cardDistractors(card, 3, c => c.title, false).map(c => ({ text: c.title }));
+    return shuffleOptions({
+      topic: card.t, src: "auto", answer: 0,
+      prompt: "Which concept does this describe?",
+      promptDesc: card.body,
+      options: [{ text: card.title }, ...ds],
+      why: `${card.title}: ${card.body}`
+    });
+  }
+
+  function buildRound(topicKey) {
+    const bankPool = shuffle((topicKey ? QUIZ.filter(x => x.t === topicKey) : QUIZ).slice());
+    const cardPool = shuffle((topicKey ? CARDS.filter(c => c.t === topicKey) : CARDS).slice());
+    const out = []; let bi = 0, ci = 0;
+    const target = Math.min(ROUND_LEN, bankPool.length + cardPool.length);
+    while (out.length < target) {
+      const bankLeft = bi < bankPool.length, cardLeft = ci < cardPool.length;
+      if (!bankLeft && !cardLeft) break;
+      const takeBank = bankLeft && (!cardLeft || Math.random() < 0.5);   // ~50/50 theory vs auto
+      if (takeBank) out.push(normalizeBank(bankPool[bi++]));
+      else { const q = autoQuestion(cardPool[ci++]); if (q) out.push(q); }
+    }
+    return out;
+  }
+
+  function optionMarkup(opt, i) {
+    const inner = opt.formula
+      ? `<span class="js-tex quiz-opt__tex" data-tex="${escapeAttr(opt.formula)}"></span>`
+      : `<span class="quiz-opt__txt">${escapeHtml(opt.text)}</span>`;
+    return `<button class="quiz-opt" data-i="${i}"><span class="quiz-opt__key">${String.fromCharCode(65 + i)}</span>${inner}</button>`;
+  }
+  function renderQuizTex(root) {
+    $$(".js-tex", root).forEach(el => renderFormula(el, el.dataset.tex, el.classList.contains("quiz__qformula")));
+  }
+
+  function enterQuiz() {
+    if (qz && qz.phase === "play") { showQuestion(); return; }
+    if (qz && qz.phase === "result") return;   // keep the results screen as-is
+    renderQuizHome();
+  }
+
+  function renderQuizHome() {
+    qz = null;
+    const q = S.quiz;
+    const acc = q.answered ? Math.round(q.correct / q.answered * 100) : 0;
+    quizRoot.innerHTML = `
+      <div class="screen__head">
+        <h1>Quiz</h1>
+        <p class="muted">Rapid-fire questions on theory &amp; formulas. Build a combo, beat your best.</p>
+      </div>
+      <div class="quiz-stats">
+        <div class="quiz-stat"><span class="quiz-stat__n">${q.best}</span><span class="quiz-stat__l">Best score</span></div>
+        <div class="quiz-stat"><span class="quiz-stat__n">${acc}%</span><span class="quiz-stat__l">Accuracy</span></div>
+        <div class="quiz-stat"><span class="quiz-stat__n">${q.answered}</span><span class="quiz-stat__l">Answered</span></div>
+      </div>
+      <button class="quiz-cta" id="quizStartAll">
+        <span class="quiz-cta__title">⚡ Quick Quiz</span>
+        <span class="quiz-cta__sub">${ROUND_LEN} mixed questions · all topics</span>
+        ${svgPath("M5 12h14M13 6l6 6-6 6")}
+      </button>
+      <h2 class="section-title">Quiz one topic</h2>
+      <div class="quiz-topics" id="quizTopics"></div>`;
+    $("#quizStartAll").addEventListener("click", () => startQuiz(null));
+    const grid = $("#quizTopics");
+    TOPICS.forEach(t => {
+      const b = document.createElement("button");
+      b.className = "quiz-topic"; b.style.setProperty("--accent", t.color);
+      b.innerHTML = `<span class="quiz-topic__icon">${svgPath(t.icon)}</span><span class="quiz-topic__name">${t.name}</span>`;
+      b.addEventListener("click", () => startQuiz(t.key));
+      grid.appendChild(b);
+    });
+  }
+
+  function startQuiz(topicKey) {
+    const round = buildRound(topicKey || null);
+    if (!round.length) { toast("No questions for this topic yet"); return; }
+    qz = { round, i: 0, score: 0, correct: 0, streak: 0, bestStreak: 0, xp: 0, topic: topicKey || null, answered: false, phase: "play", t0: 0 };
+    showQuestion();
+  }
+
+  function showQuestion() {
+    const q = qz.round[qz.i];
+    if (q.bonus === undefined) q.bonus = Math.random() < 0.16;   // variable reward
+    qz.answered = false;
+    qz.t0 = Date.now();
+    const tm = topicMeta(q.topic);
+    const pct = Math.round(qz.i / qz.round.length * 100);
+    const flame = svgPath("M12 3c1 3-1 4-1 6a3 3 0 0 0 6 0c0-1 1 2 1 4a6 6 0 1 1-11.5-2.3C7.7 7.7 11 6 12 3z");
+    quizRoot.innerHTML = `
+      <div class="quiz" style="--accent:${tm.color}">
+        <div class="quiz__bar">
+          <button class="quiz__quit" id="quizQuit" aria-label="Quit quiz">${svgPath("M18 6 6 18M6 6l12 12")}</button>
+          <div class="quiz__prog"><i style="width:${pct}%"></i></div>
+          <div class="quiz__score">${svgPath("M12 2l2.9 6.3 6.9.6-5.2 4.6 1.6 6.8L12 17.8 5.8 20l1.6-6.8L2.2 8.9l6.9-.6z")}<span id="quizScore">${qz.score}</span></div>
+        </div>
+        <div class="quiz__meta">
+          <span class="quiz__chip"><span class="quiz__chip-ic">${svgPath(tm.icon)}</span>${tm.name}</span>
+          <span class="quiz__count">${qz.i + 1} / ${qz.round.length}</span>
+        </div>
+        <div class="quiz__combo ${qz.streak >= 2 ? "show" : ""}" id="quizCombo">${flame}<span>${qz.streak}</span></div>
+        <div class="quiz__q">
+          ${q.bonus ? `<span class="quiz__bonus">2× BONUS</span>` : ""}
+          <h2 class="quiz__qtext">${escapeHtml(q.prompt)}</h2>
+          ${q.promptFormula ? `<div class="quiz__qformula js-tex" data-tex="${escapeAttr(q.promptFormula)}"></div>` : ""}
+          ${q.promptDesc ? `<p class="quiz__qdesc">${escapeHtml(q.promptDesc)}</p>` : ""}
+        </div>
+        <div class="quiz__timer" id="quizTimer"><i></i></div>
+        <div class="quiz__opts" id="quizOpts">${q.options.map(optionMarkup).join("")}</div>
+        <div class="quiz__fb" id="quizFb" hidden></div>
+      </div>`;
+    renderQuizTex(quizRoot);
+    $("#quizQuit").addEventListener("click", () => { qz = null; renderQuizHome(); });
+    $$("#quizOpts .quiz-opt").forEach(b => b.addEventListener("click", () => answerQuestion(+b.dataset.i)));
+  }
+
+  function answerQuestion(idx) {
+    if (qz.answered) return;
+    qz.answered = true;
+    const q = qz.round[qz.i];
+    const correct = idx === q.answer;
+    const fast = correct && (Date.now() - qz.t0) / 1000 < SPEED_S;
+    const tEl = $("#quizTimer i"); if (tEl) tEl.style.animationPlayState = "paused";
+
+    if (correct) { qz.streak++; qz.bestStreak = Math.max(qz.bestStreak, qz.streak); qz.correct++; }
+    else qz.streak = 0;
+    const mult = comboMult(qz.streak);
+    let gained = 0;
+    if (correct) { gained = Math.round(10 * mult * (q.bonus ? 2 : 1)) + (fast ? 5 : 0); qz.score += gained; qz.xp += gained; }
+
+    bumpGoal(); bumpStreak(); refreshTopbar(); persist();   // count as study activity
+    navHaptic(correct ? 18 : 45);
+
+    $$("#quizOpts .quiz-opt").forEach((b, i) => {
+      b.disabled = true;
+      if (i === q.answer) b.classList.add("correct");
+      else if (i === idx) b.classList.add("wrong");
+    });
+    $("#quizScore").textContent = qz.score;
+    const comboEl = $("#quizCombo");
+    if (qz.streak >= 2) { comboEl.querySelector("span").textContent = qz.streak; comboEl.classList.add("show", "pulse"); }
+    else comboEl.classList.remove("show");
+
+    const last = qz.i === qz.round.length - 1;
+    const verdict = correct
+      ? `<div class="quiz__verdict ok">${svgPath("M20 6 9 17l-5-5")}<span>${fast ? "Fast! " : ""}Correct &nbsp;+${gained} XP${mult > 1 ? `<b>&nbsp;${mult}× combo</b>` : ""}${q.bonus ? `<b>&nbsp;2× bonus</b>` : ""}</span></div>`
+      : `<div class="quiz__verdict no">${svgPath("M18 6 6 18M6 6l12 12")}<span>Not quite — combo reset</span></div>`;
+    const fb = $("#quizFb");
+    fb.innerHTML = `${verdict}${q.why ? `<p class="quiz__why">${escapeHtml(q.why)}</p>` : ""}
+      <button class="btn-primary btn-block quiz__next" id="quizNext">${last ? "See results" : "Next question"}</button>`;
+    fb.hidden = false;
+    $("#quizNext").addEventListener("click", nextQuestion);
+    if (correct && (qz.streak === 5 || qz.streak === 10 || q.bonus)) confettiBurst();
+    fb.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
+  function nextQuestion() {
+    qz.i++;
+    if (qz.i >= qz.round.length) finishQuiz();
+    else showQuestion();
+  }
+
+  function finishQuiz() {
+    const total = qz.round.length;
+    const acc = total ? Math.round(qz.correct / total * 100) : 0;
+    const newBest = qz.score > S.quiz.best;
+    S.quiz.best = Math.max(S.quiz.best, qz.score);
+    S.quiz.played += 1;
+    S.quiz.answered += total;
+    S.quiz.correct += qz.correct;
+    S.quiz.bestCombo = Math.max(S.quiz.bestCombo, qz.bestStreak);
+    if (acc === 100) S.quiz.perfect += 1;
+    addXP(qz.xp);
+    persist(); checkBadges(); refreshTopbar();
+    qz.phase = "result";
+    renderQuizResult({ total, acc, score: qz.score, xp: qz.xp, correct: qz.correct, bestStreak: qz.bestStreak, newBest, topic: qz.topic });
+    if (acc >= 80 || newBest) confettiBurst();
+  }
+
+  function countUp(el, to, ms) {
+    if (!el) return;
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) { el.textContent = to; return; }
+    const start = performance.now();
+    (function step(now) {
+      const p = Math.min((now - start) / ms, 1);
+      el.textContent = Math.round(to * (1 - Math.pow(1 - p, 3)));
+      if (p < 1) requestAnimationFrame(step);
+    })(performance.now());
+  }
+
+  function renderQuizResult(r) {
+    const perfect = r.acc === 100;
+    const burst = perfect ? "🏆" : r.acc >= 80 ? "🎉" : r.acc >= 50 ? "💪" : "🧠";
+    const headline = perfect ? "Perfect round!" : r.acc >= 80 ? "Great round!" : r.acc >= 50 ? "Nice work!" : "Round complete";
+    quizRoot.innerHTML = `
+      <div class="quiz-result fade-in">
+        <div class="quiz-result__burst">${burst}</div>
+        <h2 class="quiz-result__title">${headline}</h2>
+        ${r.newBest ? `<div class="quiz-result__best">★ New best score!</div>` : ""}
+        <div class="quiz-result__score" id="quizFinalScore">0</div>
+        <div class="quiz-result__pts">points</div>
+        <div class="quiz-result__grid">
+          <div><span class="n">${r.acc}%</span><span class="l">Accuracy</span></div>
+          <div><span class="n">${r.correct}/${r.total}</span><span class="l">Correct</span></div>
+          <div><span class="n">${r.bestStreak}×</span><span class="l">Best combo</span></div>
+          <div><span class="n">+${r.xp}</span><span class="l">XP earned</span></div>
+        </div>
+        <button class="btn-primary btn-block quiz-result__again" id="quizAgain">Play again</button>
+        <button class="btn-ghost btn-block" id="quizHome">Back to quiz menu</button>
+      </div>`;
+    countUp($("#quizFinalScore"), r.score, 850);
+    $("#quizAgain").addEventListener("click", () => startQuiz(r.topic));
+    $("#quizHome").addEventListener("click", () => renderQuizHome());
+  }
 
   /* ============================================================
      Boot
